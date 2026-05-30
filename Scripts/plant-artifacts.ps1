@@ -114,14 +114,11 @@ Write-Log "Objective 2 svchost-helper artifact planted."
 # Step 1 - List processes
 #python .\vol.py -f ..\Evidence\MEMORY.dmp windows.pslist
 
-# Step 2 - Identify suspicious executable memory regions
-#python .\vol.py -f ..\Evidence\MEMORY.dmp windows.malfind
+# Interesting svc-host-helper.exe process should be visible with injected code marker in memory
+#Then look for the windows.cmdline and we can see it running out of \Temp
 
-# Step 3 - Confirm the suspicious process command line
-#python .\vol.py -f ..\Evidence\MEMORY.dmp windows.cmdline
+#Then you use windows.malware.malfind and you can see the voltatilty marker in memory in the ASCII section of the injected memory
 
-# Step 4 - Review memory regions for the suspicious PID
-#python .\vol.py -f ..\Evidence\MEMORY.dmp windows.vadinfo --pid <PID>
 
 # ==============================================================================
 # OBJECTIVE 3 - Plant command history artifacts
@@ -163,3 +160,66 @@ Write-Log "Objective 3 artifacts planted."
 
 Write-Log "Artifact planting complete."
 
+# ==============================================================================
+# OBJECTIVE 3 - Plant command history artifacts
+# Scenario: Attacker ran reconnaissance and lateral movement commands
+# ==============================================================================
+Write-Log "Planting Objective 3 artifacts: command history and attack timeline."
+
+$TimelinePath = "C:\Users\Public\Desktop\LAB_FILES\Evidence\attacker-command-timeline.txt"
+
+$AttackerCommands = @(
+    "whoami /priv",
+    "net user",
+    "net localgroup administrators",
+    "net user administrator /active:yes",
+    "net localgroup administrators svc_backup /add",
+    "ipconfig /all",
+    "netstat -ano",
+    "dir C:\Users\Administrator\Documents",
+    "dir C:\Users\Public\Desktop",
+    "tasklist /svc"
+)
+
+# Write a timeline file for learner validation and grading.
+$TimelineLines = @()
+$BaseTime = Get-Date
+
+for ($i = 0; $i -lt $AttackerCommands.Count; $i++) {
+    $EventTime = $BaseTime.AddMinutes($i)
+    $TimelineLines += "$($EventTime.ToString('yyyy-MM-dd HH:mm:ss')) - $($AttackerCommands[$i])"
+}
+
+$TimelineLines | Set-Content -Path $TimelinePath -Force
+
+# Execute each command once so the system state matches the story.
+foreach ($cmd in $AttackerCommands) {
+    cmd /c $cmd 2>&1 | Out-Null
+}
+
+# Leave a persistent process with the full attack sequence in memory.
+$AttackSequence = $AttackerCommands -join " ; "
+
+Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @(
+    "-NoProfile",
+    "-ExecutionPolicy", "Bypass",
+    "-Command",
+    "`$attack_timeline = '$AttackSequence'; while (`$true) { Start-Sleep 60 }"
+)
+
+Write-Log "Objective 3 command history and timeline artifacts planted."
+
+# Step 1 - Save process command lines for review
+#python .\vol.py -f ..\Evidence\MEMORY.dmp windows.cmdline > ..\Evidence\cmdline-results.txt
+
+# Step 2 - Search for attacker timeline artifacts
+#findstr /i "attack_timeline whoami netstat tasklist svc_backup" ..\Evidence\cmdline-results.txt
+
+# Step 3 - Cross-reference suspicious PowerShell processes
+
+#python .\vol.py -f ..\Evidence\MEMORY.dmp windows.pslist > ..\Evidence\pslist-results.txt
+
+
+# Step 4 - Open saved results for timeline reconstruction
+#notepad ..\Evidence\cmdline-results.txt
+#notepad ..\Evidence\pslist-results.txt
