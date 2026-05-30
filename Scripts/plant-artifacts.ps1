@@ -38,34 +38,90 @@ Write-Log "Objective 1 artifacts planted."
 
 
 # ==============================================================================
-# OBJECTIVE 2 - Plant suspicious process artifacts
-# Scenario: Attacker masqueraded a malicious process as a legitimate svchost
+# OBJECTIVE 2 - Plant suspicious executable memory artifact
+# Scenario: Attacker used a helper process that appears related to svchost
 # ==============================================================================
-Write-Log "Planting Objective 2 artifacts: suspicious processes."
 
-# Copy powershell.exe to Temp and rename it svchost.exe to simulate masquerading
-Copy-Item "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" "C:\Windows\Temp\svchost.exe" -Force
+Write-Log "Planting Objective 2 artifacts: suspicious executable memory."
 
-# Launch the fake svchost so it stays alive in memory
-Start-Process "C:\Windows\Temp\svchost.exe" -ArgumentList "-WindowStyle Hidden -Command `"while(`$true){Start-Sleep 60}`""
+$CodePath = "C:\Windows\Temp\svchost-helper.cs"
+$ExePath  = "C:\Windows\Temp\svchost-helper.exe"
 
-Write-Log "Objective 2 artifacts planted."
+$Code = @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
 
-# Learner commands for Objective 2:
-# cd C:\Users\Public\Desktop\LAB_FILES\volatility3
-#
-# Step 1 - List all processes and spot the fake svchost
-# python .\vol.py -f ..\Evidence\MEMORY.dmp windows.pslist
-#
-# Step 2 - Check full path of each process to confirm masquerading
-# python .\vol.py -f ..\Evidence\MEMORY.dmp windows.cmdline
-#
-# Step 3 - Scan for injected or malicious memory segments
-# python .\vol.py -f ..\Evidence\MEMORY.dmp windows.malfind
-#
-# Step 4 - Check loaded DLLs for a suspicious PID (replace <PID> with PID from pslist)
-# python .\vol.py -f ..\Evidence\MEMORY.dmp windows.dlllist --pid <PID>
+public class SvchostHelper
+{
+    [DllImport("kernel32.dll")]
+    static extern IntPtr VirtualAlloc(
+        IntPtr lpAddress,
+        UIntPtr dwSize,
+        uint flAllocationType,
+        uint flProtect
+    );
 
+    public static void Main()
+    {
+        byte[] buffer = new byte[4096];
+
+        for (int i = 0; i < buffer.Length; i++)
+        {
+            buffer[i] = 0x90;
+        }
+
+        byte[] marker = Encoding.ASCII.GetBytes("VOLATILITY_LAB_INJECTED_CODE_MARKER");
+        Array.Copy(marker, buffer, marker.Length);
+
+        IntPtr memory = VirtualAlloc(
+            IntPtr.Zero,
+            (UIntPtr)buffer.Length,
+            0x3000,
+            0x40
+        );
+
+        Marshal.Copy(buffer, 0, memory, buffer.Length);
+
+        while (true)
+        {
+            Thread.Sleep(60000);
+        }
+    }
+}
+"@
+
+Set-Content -Path $CodePath -Value $Code -Force
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
+`$code = Get-Content '$CodePath' -Raw
+Add-Type -TypeDefinition `$code -OutputAssembly '$ExePath' -OutputType ConsoleApplication
+"
+
+Start-Process $ExePath -WindowStyle Hidden
+
+schtasks /Create `
+    /TN "SvchostHelper" `
+    /TR $ExePath `
+    /SC ONSTART `
+    /RU SYSTEM `
+    /RL HIGHEST `
+    /F | Out-Null
+
+Write-Log "Objective 2 svchost-helper artifact planted."
+
+# Step 1 - List processes
+#python .\vol.py -f ..\Evidence\MEMORY.dmp windows.pslist
+
+# Step 2 - Identify suspicious executable memory regions
+#python .\vol.py -f ..\Evidence\MEMORY.dmp windows.malfind
+
+# Step 3 - Confirm the suspicious process command line
+#python .\vol.py -f ..\Evidence\MEMORY.dmp windows.cmdline
+
+# Step 4 - Review memory regions for the suspicious PID
+#python .\vol.py -f ..\Evidence\MEMORY.dmp windows.vadinfo --pid <PID>
 
 # ==============================================================================
 # OBJECTIVE 3 - Plant command history artifacts
